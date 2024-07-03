@@ -1,0 +1,64 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: unseal-vault
+spec:
+  template:
+    spec:
+      containers:
+        - name: k8s
+          image: alpine/k8s:1.28.3
+          command: [ "/bin/sh", "-c" ]
+          args:
+            - |
+
+              set -e
+
+              kubectl exec -ti external-secrets-demo-stack-vault-0 -n external-secrets-demo-stack -- vault operator init > output
+
+              # Extract tokens and assign to variables
+              unseal_key_1=$(grep "Unseal Key 1" output | awk '{print $NF}')
+              unseal_key_2=$(grep "Unseal Key 2" output | awk '{print $NF}')
+              unseal_key_3=$(grep "Unseal Key 3" output | awk '{print $NF}')
+              unseal_key_4=$(grep "Unseal Key 4" output | awk '{print $NF}')
+              unseal_key_5=$(grep "Unseal Key 5" output | awk '{print $NF}')
+              initial_root_token=$(grep "Initial Root Token" output | awk '{print $NF}')
+
+              # Print the variables to verify
+              echo "Unseal Key 1: $unseal_key_1"
+              echo "Unseal Key 2: $unseal_key_2"
+              echo "Unseal Key 3: $unseal_key_3"
+              echo "Unseal Key 4: $unseal_key_4"
+              echo "Unseal Key 5: $unseal_key_5"
+              echo "Initial Root Token: $initial_root_token"
+
+              kubectl delete secret vault-root-token || echo "secret not there yet"
+              kubectl create secret generic vault-root-token --from-literal=key="$initial_root_token"
+
+              kubectl exec -ti external-secrets-demo-stack-vault-0 -n external-secrets-demo-stack -- vault operator unseal $unseal_key_1
+              kubectl exec -ti external-secrets-demo-stack-vault-0 -n external-secrets-demo-stack -- vault operator unseal $unseal_key_2
+              kubectl exec -ti external-secrets-demo-stack-vault-0 -n external-secrets-demo-stack -- vault operator unseal $unseal_key_3
+
+      restartPolicy: OnFailure
+  backoffLimit: 10
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: unseal-vault
+rules:
+  - apiGroups: [""]
+    resources: ["secrets", "pods", "pods/exec"]
+    verbs: ["get", "watch", "list", "create", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: unseal-vault
+subjects:
+  - kind: ServiceAccount
+    name: default
+roleRef:
+  kind: Role
+  name: unseal-vault
+  apiGroup: rbac.authorization.k8s.io
